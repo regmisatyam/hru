@@ -17,7 +17,7 @@ const eventLabels = {
   2: "Head Turn",
   3: "Multiple Faces",
   4: "No Face",
-  5: "Unknown"
+  5: "Low Focus"
 };
 
 const CheatChart = () => {

@@ -238,10 +238,13 @@ def process_frame(frame, timestamp=None):
     
     score, status = get_focus_score(result, w, h, phone_detected)
 
-    if status == "Focused":
-        focus_scores.append(score)
+    # Always append the focus score to track trend over time
+    focus_scores.append(score)
+    
+    # Track cheating/distraction events separately
     if score < 40:
         cheat_times.append(round(timestamp, 2))
+        cheat_event.append(5)  # Event type 5 for general low focus/distraction
         print(f"🚨 Cheat detected at {timestamp:.2f}s - Score: {score}, Status: {status}")
 
     return json.dumps({
