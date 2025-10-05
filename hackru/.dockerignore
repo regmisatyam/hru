@@ -1,0 +1,61 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Virtual environments
+myenv/
+venv/
+env/
+ENV/
+.venv
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Git
+.git/
+.gitignore
+
+# Logs
+*.log
+logs/
+
+# Environment variables
+.env
+.env.local
+
+# Documentation
+README.md
+docs/
+
+# Scripts
+start_server.sh
+*.sh
+
+# Test files
+tests/
+test_*.py
+*_test.py
+
+# Model files (if large, download at runtime instead)
+# *.pt
+
+# Temporary files
+tmp/
+temp/
+*.tmp

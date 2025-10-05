@@ -1,0 +1,45 @@
+services:
+  - type: web
+    name: hackru-app
+    runtime: docker
+    plan: starter # Use 'free' for free tier or 'starter' for paid
+    region: oregon # Choose your preferred region
+    
+    # Build settings
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    
+    # Environment variables
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12
+      - key: PORT
+        value: 8000
+      # Add your API keys and secrets here
+      # - key: GOOGLE_API_KEY
+      #   sync: false # Set to true if you want to use Render's secret management
+      # - key: OTHER_ENV_VAR
+      #   value: your_value
+    
+    # Health check endpoint
+    healthCheckPath: /
+    
+    # Auto-deploy settings
+    autoDeploy: true
+    
+    # Scaling settings
+    scaling:
+      minInstances: 1
+      maxInstances: 1
+    
+    # Disk storage (if needed for temporary files)
+    # disk:
+    #   name: storage
+    #   mountPath: /app/data
+    #   sizeGB: 1
+
+# Optional: Add database or other services if needed
+# databases:
+#   - name: postgres-db
+#     databaseName: hackru_db
+#     plan: starter
