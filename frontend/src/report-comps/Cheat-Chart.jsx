@@ -23,16 +23,16 @@ const eventLabels = {
 const CheatChart = () => {
   const [cheatData, setCheatData] = useState([]);
   const [loading, setLoading] = useState(true);
-
-  const MEDIAPIPE_API_URL = import.meta.env.VITE_MEDIAPIPE_API_URL || 'http://localhost:8001';
+  const [error, setError] = useState(null);
 
   useEffect(() => {
     const fetchCheatData = async () => {
       try {
         setLoading(true);
+        setError(null);
         
         const res = await axios.get(
-          `${MEDIAPIPE_API_URL}/post-session?chart_type=cheat`
+          "http://localhost:8001/post-session?chart_type=cheat"
         );
 
         // Transform to scatter plot format
@@ -43,15 +43,8 @@ const CheatChart = () => {
 
         setCheatData(formatted);
       } catch (err) {
-        console.error('Error fetching cheat chart data, using mock data:', err);
-        // Use mock data instead of showing error
-        const mockData = [
-          { time: 180, event: 1 },
-          { time: 420, event: 2 },
-          { time: 900, event: 1 },
-          { time: 1200, event: 0 }
-        ];
-        setCheatData(mockData);
+        console.error('Error fetching cheat chart data:', err);
+        setError(err.message);
       } finally {
         setLoading(false);
       }
@@ -106,9 +99,33 @@ const CheatChart = () => {
     );
   }
 
-  // Don't show error state, just show loading or data
-  if (!cheatData || cheatData.length === 0) {
-    return null;
+  if (error) {
+    return (
+      <div className="mx-auto max-w-4xl px-8 py-12">
+        <div className="relative group animate-scale-in">
+          {/* Liquid Glass Container */}
+          <div className="absolute inset-0 bg-white/5 backdrop-blur-2xl rounded-3xl border border-white/10 shadow-2xl"></div>
+          <div className="absolute inset-0 bg-gradient-to-br from-white/10 via-white/5 to-transparent rounded-3xl"></div>
+          <div className="absolute inset-0 bg-gradient-to-tl from-red-500/10 via-transparent to-orange-500/10 rounded-3xl opacity-60"></div>
+          
+          <div className="relative p-8">
+            <div className="flex items-center space-x-3 mb-6">
+              <div className="w-3 h-3 bg-red-400 rounded-full shadow-lg shadow-red-400/50"></div>
+              <h2 className="text-2xl font-semibold text-white tracking-tight drop-shadow-sm">Distraction Timeline</h2>
+            </div>
+            <div className="flex items-center justify-center h-80">
+              <div className="text-center">
+                <div className="w-12 h-12 bg-red-400/20 rounded-full flex items-center justify-center mx-auto mb-4 backdrop-blur-sm border border-red-400/30">
+                  <div className="w-6 h-6 border-2 border-red-400 rounded-full border-t-transparent animate-spin"></div>
+                </div>
+                <div className="text-red-300 font-medium drop-shadow-sm">Unable to load data</div>
+                <div className="text-white/60 text-sm mt-1 drop-shadow-sm">{error}</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
   }
 
   return (

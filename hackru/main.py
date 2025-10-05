@@ -1,7 +1,6 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from ws_routes import study_ws, charts, messages
-from backend.routes import tts
+from ws_routes import study_ws, charts, messages, tts
 
 app = FastAPI()
 

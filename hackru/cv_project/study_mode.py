@@ -1,17 +1,16 @@
-# Study Mode - Focus Detection with Mock Data
-# This version uses mock data for testing
-
 import cv2
 import mediapipe as mp
 import numpy as np
 from ultralytics import YOLO
 import time
-import json
-import torch
-import random
+import matplotlib.pyplot as plt
+import pandas as pd
+from fpdf import FPDF
+from datetime import datetime
 import os
+import json
 
-# Initialize Mediapipe
+# --- Initialize Mediapipe ---
 mp_face_mesh = mp.solutions.face_mesh
 face_mesh = mp_face_mesh.FaceMesh(
     static_image_mode=False,
@@ -21,260 +20,332 @@ face_mesh = mp_face_mesh.FaceMesh(
     min_tracking_confidence=0.5
 )
 
-# Initialize YOLO Model
-try:
-    from ultralytics.nn.tasks import DetectionModel
-    torch.serialization.add_safe_globals([DetectionModel])
-except Exception as e:
-    print(f"Warning: {e}")
+# --- Initialize Model ---
+model = YOLO('yolov5su.pt')
 
-model_path = 'yolov5su.pt' if os.path.exists('yolov5su.pt') else 'yolov5s.pt'
-try:
-    model = YOLO(model_path)
-except Exception as e:
-    print(f"Warning: {e}")
-    model = None
-
-# Global Session State
+# --- Global session state --- same variables as the py file 
 focus_scores = []
 cheat_times = []
-cheat_event = []
-
 blink_counter = 0
+start_time = time.time()
+SESSION_DURATION = 30  # seconds
+
+cheat_event = []
 phone_checks = 0
 face_events = 0
 turn_events = 0
 down_events = 0
-
 phone_flag = False
 face_flag = False
 turn_flag = False
 down_flag = False
-no_face_flag = False
-eyes_closed_flag = False
 
-current_state = "focused"
-state_start_time = time.time()
-focus_duration = 0.0
-distraction_duration = 0.0
-cheat_duration = 0.0
-last_frame_time = time.time()
-start_time = time.time()
-SESSION_DURATION = 30
-
-# Event type constants
-EVENT_LOOKING_DOWN = 1
-EVENT_HEAD_TURNED = 2
-EVENT_MULTIPLE_FACES = 3
-EVENT_PHONE_DETECTED = 4
-EVENT_NO_FACE = 5
-EVENT_EYES_CLOSED = 6
-
-USE_MOCK_DATA = True
 
 def set_session_duration(seconds): 
-    global SESSION_DURATION, start_time, state_start_time, last_frame_time
-    global focus_duration, distraction_duration, cheat_duration
-    global current_state, focus_scores, cheat_times, cheat_event
-    
+    global SESSION_DURATION, start_time
     SESSION_DURATION = seconds
     start_time = time.time()
-    state_start_time = time.time()
-    last_frame_time = time.time()
-    focus_duration = 0.0
-    distraction_duration = 0.0
-    cheat_duration = 0.0
-    current_state = "focused"
-    focus_scores = []
-    cheat_times = []
-    cheat_event = []
+    
+# --- Euclidean Distance ---
+def euclidean(pt1, pt2):
+    return np.linalg.norm(np.array(pt1) - np.array(pt2))
 
-def generate_mock_focus_score():
-    if random.random() < 0.70:
-        return random.randint(70, 95)
-    elif random.random() < 0.85:
-        return random.randint(40, 69)
+#takes 2 coordinates as parameters and calculates distance. first, vector subtraction inside brackets,
+#and then, norm applies the formula (x2 + y2)^1/2.
+
+# --- Eye Openness (eye_aspect_ratio) ---
+def eye_openness(eye_top, eye_bottom, eye_left, eye_right):
+    vertical_openness = euclidean(eye_top, eye_bottom)
+    horizontal_openness = euclidean(eye_left, eye_right)
+    return vertical_openness / horizontal_openness
+
+# --- Iris Position Ratio ---
+def iris_position_ratio(iris_center, eye_left, eye_right, eye_top, eye_bottom):
+    total_width = euclidean(eye_left, eye_right)
+    total_height = euclidean(eye_top, eye_bottom)
+    iris_to_left = euclidean(iris_center, eye_left)
+    iris_to_top = euclidean(iris_center, eye_top)
+    horizontal_ratio = iris_to_left / total_width
+    vertical_ratio = iris_to_top / total_height
+    return horizontal_ratio, vertical_ratio
+
+def head_tilt_ratio(left_temple, right_temple, nose_tip): 
+    left_to_nose = euclidean(left_temple, nose_tip)
+    right_to_nose = euclidean(right_temple, nose_tip)
+    return left_to_nose / right_to_nose
+
+def head_down_ratio(nose_tip, chin, eye_level): 
+    eye_to_nose = euclidean(eye_level, nose_tip)
+    chin_to_nose = euclidean(nose_tip, chin)
+    return eye_to_nose / chin_to_nose
+
+# --- Focus Score Function ---
+def get_focus_score(results, w, h, phone_detected): #same logic as py file 
+    global blink_counter  # so we can retain value across frames
+
+    if not results.multi_face_landmarks:
+        return 0, "No face detected"
+
+    face = results.multi_face_landmarks[0]
+    landmarks = face.landmark
+
+    def get_point(idx):
+        lm = landmarks[idx]
+        return int(lm.x * w), int(lm.y * h)
+
+    eye_top = get_point(159)
+    eye_bottom = get_point(145)
+    eye_left = get_point(33)
+    eye_right = get_point(133)
+    iris_center = get_point(468)
+    nose_tip = get_point(1)
+    left_temple = get_point(234)
+    right_temple = get_point(454)
+    chin = get_point(152)
+    eye_level = get_point(151)
+
+    eye_aspect_ratio = eye_openness(eye_top, eye_bottom, eye_left, eye_right)
+    iris_horizontal, iris_vertical = iris_position_ratio(iris_center, eye_left, eye_right, eye_top, eye_bottom)
+    head_tilt_value = head_tilt_ratio(left_temple, right_temple, nose_tip)
+    head_down_value = head_down_ratio(nose_tip, chin, eye_level)
+
+    focus = 100
+    status = "Focused"
+
+    if iris_horizontal < 0.25 or iris_horizontal > 0.75 or iris_vertical < 0.25 or iris_vertical > 0.75:
+        focus -= 50
+    if head_tilt_value > 1.8 or head_tilt_value < 0.2:
+        focus -= 50
+    if head_down_value > 1.3 or head_down_value < 0.75:
+        focus -= 50
+    if iris_horizontal < 0.4 or iris_horizontal > 0.6:
+        focus -= 30
+    if iris_vertical < 0.4 or iris_vertical > 0.6:
+        focus -= 30
+
+    # Blink detection
+    if eye_aspect_ratio < 0.2:
+        blink_counter += 1
+        if blink_counter >= 3:
+            return 0, "Eyes Closed"
     else:
-        return random.randint(20, 45)
+        blink_counter = 0
 
-def update_state_tracking(new_state):
-    global current_state, state_start_time, focus_duration, distraction_duration, cheat_duration
-    global last_frame_time
-    
-    current_time = time.time()
-    time_in_state = current_time - state_start_time
-    
-    if new_state != current_state:
-        if current_state == "focused":
-            focus_duration += time_in_state
-        elif current_state == "distracted":
-            distraction_duration += time_in_state
-        elif current_state == "cheating":
-            cheat_duration += time_in_state
-        
-        current_state = new_state
-        state_start_time = current_time
-    
-    last_frame_time = current_time
+    if phone_detected:
+        return 0, "Phone Detected"
 
-def get_distraction_description(event_type):
-    descriptions = {
-        EVENT_LOOKING_DOWN: "Looking Down",
-        EVENT_HEAD_TURNED: "Head Turned Away",
-        EVENT_MULTIPLE_FACES: "Multiple Faces Detected",
-        EVENT_PHONE_DETECTED: "Phone Detected",
-        EVENT_NO_FACE: "No Face Detected",
-        EVENT_EYES_CLOSED: "Eyes Closed"
-    }
-    return descriptions.get(event_type, "Unknown Distraction")
+    return max(0, focus), status
 
+
+# --- Detect Cheating Events ---
+def detect_phone(results_yolo):
+    global phone_checks, phone_flag
+    phone_detected = False
+    for box in results_yolo.boxes:
+        cls_id = int(box.cls[0])
+        conf = float(box.conf[0])
+        label = model.names[cls_id]
+        if label == 'cell phone' and conf > 0.5:
+            phone_detected = True
+            break
+    if phone_detected and not phone_flag:
+        phone_checks += 1
+        phone_flag = True
+        cheat_times.append(time.time() - start_time)
+        cheat_event.append(4)
+    elif not phone_detected:
+        phone_flag = False
+    return phone_detected
+
+def detect_multiple_faces(result):
+    global face_events, face_flag
+    multi_face = bool(result.multi_face_landmarks and len(result.multi_face_landmarks) > 1)
+    if multi_face and not face_flag:
+        face_events += 1
+        face_flag = True
+        cheat_times.append(time.time() - start_time)
+        cheat_event.append(3)
+    elif not multi_face:
+        face_flag = False
+    return multi_face
+
+def detect_head_pose(result, w, h):
+    global turn_events, down_events, turn_flag, down_flag
+    if not result.multi_face_landmarks:
+        return False, False
+    face = result.multi_face_landmarks[0]
+    lm = face.landmark
+    def P(i): return (int(lm[i].x * w), int(lm[i].y * h))
+    nose = P(1)
+    left_temple = P(234)
+    right_temple = P(454)
+    chin = P(152)
+    eye_lvl = P(151)
+    tilt = head_tilt_ratio(left_temple, right_temple, nose)
+    down = head_down_ratio(nose, chin, eye_lvl)
+    
+    # Check for extreme turn (head tilt)
+    extreme_turn = (tilt > 1.5) or (tilt < 0.67)
+    if extreme_turn and not turn_flag:
+        turn_events += 1
+        turn_flag = True
+        cheat_times.append(time.time() - start_time)
+        cheat_event.append(2)
+    elif not extreme_turn:
+        turn_flag = False
+    
+    # Check for looking down (head down)
+    looking_down = down > 1.4
+    if looking_down and not down_flag:
+        down_events += 1
+        down_flag = True
+        cheat_times.append(time.time() - start_time)
+        cheat_event.append(1)
+    elif not looking_down:
+        down_flag = False
+    
+    return extreme_turn, looking_down
+
+
+
+
+# --- Frame Processing (called from WebSocket) ---
 def process_frame(frame, timestamp=None):
     global focus_scores, cheat_times, cheat_event
-    global current_state, focus_duration, distraction_duration, cheat_duration
 
+    # Use provided timestamp or calculate from start_time
     if timestamp is None:
         timestamp = time.time() - start_time
     
     if timestamp > SESSION_DURATION:
-        update_state_tracking(current_state)
-        return json.dumps({
-            "status": "Session Ended",
-            "focus_time": round(focus_duration, 2),
-            "distraction_time": round(distraction_duration, 2),
-            "cheat_time": round(cheat_duration, 2),
-            "total_time": round(timestamp, 2)
-        })
+        return "Session Ended"
 
-    score = generate_mock_focus_score()
+    # Phone Detection
+    results_yolo = model(frame)[0]
+    phone_detected = detect_phone(results_yolo)
+
+    # Face Detection
+    frame = cv2.flip(frame, 1) #this frame is sent by the backend after it received and decoded it from the front end
+    rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+    result = face_mesh.process(rgb_frame)
+    h, w, _ = frame.shape
     
-    if score >= 70:
-        status = "Focused"
-        new_state = "focused"
-    elif score >= 40:
-        status = "Slightly Distracted"
-        new_state = "distracted"
-    else:
-        status = "Distracted"
-        new_state = "distracted"
+    # Detect multiple faces
+    detect_multiple_faces(result)
     
-    if random.random() < 0.03 and len(cheat_event) < 10:
-        event_type = random.choice([
-            EVENT_LOOKING_DOWN,
-            EVENT_HEAD_TURNED,
-            EVENT_PHONE_DETECTED,
-            EVENT_MULTIPLE_FACES
-        ])
-        
-        cheat_times.append(timestamp)
-        cheat_event.append(event_type)
-        score = 0
-        new_state = "cheating"
-        status = get_distraction_description(event_type)
+    # Detect head pose issues
+    detect_head_pose(result, w, h)
     
-    update_state_tracking(new_state)
-    
-    if score > 0:
+    score, status = get_focus_score(result, w, h, phone_detected)
+
+    if status == "Focused":
         focus_scores.append(score)
+    if score < 40:
+        cheat_times.append(round(timestamp, 2))
+        print(f"🚨 Cheat detected at {timestamp:.2f}s - Score: {score}, Status: {status}")
 
     return json.dumps({
-        "score": score,
-        "status": status,
-        "state": new_state,
-        "timestamp": round(timestamp, 2),
-        "focus_time": round(focus_duration, 2),
-        "distraction_time": round(distraction_duration, 2),
-        "cheat_time": round(cheat_duration, 2),
-        "cheat_count": len(cheat_event),
-        "phone_detections": cheat_event.count(EVENT_PHONE_DETECTED),
-        "multiple_face_events": cheat_event.count(EVENT_MULTIPLE_FACES),
-        "head_turn_events": cheat_event.count(EVENT_HEAD_TURNED),
-        "looking_down_events": cheat_event.count(EVENT_LOOKING_DOWN),
-        "mock_data": USE_MOCK_DATA
-    })
+    "score": score,
+    "cheat_events": cheat_event[-1:]  # just latest event if needed
+})
+
+
 
 def get_session_duration(): 
     global SESSION_DURATION
+
     return SESSION_DURATION 
 
 def get_focus_data(): 
     global focus_scores
+
     return focus_scores
 
 def get_cheat_data(): 
-    global cheat_times, cheat_event
+    global cheat_times 
+    global cheat_event
+
     return cheat_times, cheat_event
 
-def get_time_metrics():
-    global current_state, state_start_time, focus_duration, distraction_duration, cheat_duration
-    
-    current_time = time.time()
-    time_in_current_state = current_time - state_start_time
-    
-    if current_state == "focused":
-        final_focus = focus_duration + time_in_current_state
-        final_distraction = distraction_duration
-        final_cheat = cheat_duration
-    elif current_state == "distracted":
-        final_focus = focus_duration
-        final_distraction = distraction_duration + time_in_current_state
-        final_cheat = cheat_duration
-    elif current_state == "cheating":
-        final_focus = focus_duration
-        final_distraction = distraction_duration
-        final_cheat = cheat_duration + time_in_current_state
-    else:
-        final_focus = focus_duration
-        final_distraction = distraction_duration
-        final_cheat = cheat_duration
-    
-    total_time = current_time - start_time
-    
-    return {
-        "focus_time": round(final_focus, 2),
-        "distraction_time": round(final_distraction, 2),
-        "cheat_time": round(final_cheat, 2),
-        "total_time": round(total_time, 2),
-        "focus_percentage": round((final_focus / total_time * 100) if total_time > 0 else 0, 1),
-        "distraction_percentage": round((final_distraction / total_time * 100) if total_time > 0 else 0, 1),
-        "cheat_percentage": round((final_cheat / total_time * 100) if total_time > 0 else 0, 1),
-        "phone_detections": cheat_event.count(EVENT_PHONE_DETECTED),
-        "multiple_face_events": cheat_event.count(EVENT_MULTIPLE_FACES),
-        "head_turn_events": cheat_event.count(EVENT_HEAD_TURNED),
-        "looking_down_events": cheat_event.count(EVENT_LOOKING_DOWN),
-        "total_cheat_events": len(cheat_event),
-        "avg_focus_score": round(sum(focus_scores) / len(focus_scores), 1) if focus_scores else 0,
-        "mock_data": USE_MOCK_DATA
-    }
 
-def reset_session():
-    global focus_scores, cheat_times, cheat_event
-    global blink_counter, phone_checks, face_events, turn_events, down_events
-    global phone_flag, face_flag, turn_flag, down_flag, no_face_flag, eyes_closed_flag
-    global current_state, state_start_time, focus_duration, distraction_duration, cheat_duration
-    global start_time, last_frame_time
-    
-    focus_scores = []
-    cheat_times = []
-    cheat_event = []
-    blink_counter = 0
-    phone_checks = 0
-    face_events = 0
-    turn_events = 0
-    down_events = 0
-    
-    phone_flag = False
-    face_flag = False
-    turn_flag = False
-    down_flag = False
-    no_face_flag = False
-    eyes_closed_flag = False
-    
-    current_state = "focused"
-    focus_duration = 0.0
-    distraction_duration = 0.0
-    cheat_duration = 0.0
-    start_time = time.time()
-    state_start_time = time.time()
-    last_frame_time = time.time()
+#import os
+# from fpdf import FPDF
+# from datetime import datetime
+# import matplotlib.pyplot as plt
+# import pandas as pd
 
-print("MOCK DATA MODE - Focus scores will be randomly generated")
+# # --- Setup Paths ---
+# BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+# REPORTS_DIR = os.path.join(BASE_DIR, "..", "reports")
+# CHART_PATH = os.path.join(REPORTS_DIR, "focus_trend.png")
+# PDF_PATH = os.path.join(REPORTS_DIR, "study_session_report.pdf")
+
+# def generate_focus_chart():
+#     if not focus_scores:
+#         print("No focus data to plot.")
+#         return
+
+#     timestamps = [round(i * (SESSION_DURATION / len(focus_scores)), 2) for i in range(len(focus_scores))]
+#     smoothed_scores = pd.Series(focus_scores).rolling(window=10, min_periods=1).mean()
+
+#     plt.figure(figsize=(10, 5))
+#     plt.plot(timestamps, smoothed_scores, color="blue", linewidth=2, label="Smoothed Focus Score")
+#     plt.axhline(50, color='red', linestyle='--', label='Distraction Threshold (50)')
+#     plt.axhline(80, color='green', linestyle='--', label='High Focus (80)')
+#     plt.title("Focus Score Over Time")
+#     plt.xlabel("Time (seconds)")
+#     plt.ylabel("Focus Score")
+#     plt.ylim(0, 100)
+#     plt.grid(True)
+#     plt.legend()
+#     plt.tight_layout()
+#     plt.savefig(CHART_PATH)
+#     plt.close()
+#     print(f"Focus trend chart saved at {CHART_PATH}")
+# import os
+
+# def generate_session_pdf(summary_text):
+#     pdf = FPDF()
+#     pdf.add_page()
+#     pdf.set_font("Arial", "B", 16)
+#     pdf.cell(0, 10, "Focus Session Report", ln=True, align='C')
+#     pdf.ln(10)
+#     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+#     pdf.set_font("Arial", "", 12)
+#     pdf.cell(0, 10, f"Generated on: {timestamp}", ln=True)
+#     pdf.ln(10)
+#     for line in summary_text.split("\n"):
+#         pdf.cell(0, 10, line, ln=True)
+#     pdf.ln(10)
+#     pdf.set_font("Arial", "B", 12)
+#     pdf.cell(0, 10, "Focus Score Chart:", ln=True)
+
+#     # 📷 Check if chart image exists before inserting
+#     if os.path.exists(CHART_PATH):
+#         pdf.image(CHART_PATH, x=10, w=190)
+#     else:
+#         print("⚠️ Warning: Chart image missing! Not embedding in PDF.")
+
+#     pdf.output(PDF_PATH)
+#     print(f"PDF report generated at {PDF_PATH}")
+
+
+# def generate_report():
+#     if not os.path.exists(REPORTS_DIR):
+#         os.makedirs(REPORTS_DIR)
+
+#     if focus_scores:
+#         avg_focus = sum(focus_scores) / len(focus_scores)
+#         summary = (
+#             f"Session Duration: {SESSION_DURATION} seconds\n"
+#             f"Average Focus: {avg_focus:.2f}\n"
+#             f"Distractions Detected: {len([s for s in focus_scores if s < 50])}\n"
+#             f"Phone Alerts: {len([1 for s in focus_scores if s == 0])}\n"
+#         )
+#     else:
+#         summary = "No valid focus scores recorded."
+
+#     generate_focus_chart()
+#     generate_session_pdf(summary)
+
+

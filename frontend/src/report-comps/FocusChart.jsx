@@ -6,29 +6,23 @@ const FocusChart = () => {
   const [chartData, setChartData] = useState([]);
   const [duration, setDuration] = useState(0);
   const [loading, setLoading] = useState(true);
-
-  const MEDIAPIPE_API_URL = import.meta.env.VITE_MEDIAPIPE_API_URL || 'http://localhost:8001';
+  const [error, setError] = useState(null);
 
   useEffect(() => {
     const fetchFocusData = async () => {
       try {
         setLoading(true);
+        setError(null);
 
         const res = await axios.get(
-          `${MEDIAPIPE_API_URL}/post-session?chart_type=focus`
+          "http://localhost:8001/post-session?chart_type=focus"
         );
         
         setChartData(res.data.chart_data || []);
         setDuration(res.data.session_duration || 0);
       } catch (err) {
-        console.error("❌ Failed to fetch chart data, using mock data:", err);
-        // Use mock data instead of showing error
-        const mockData = Array.from({ length: 25 }, (_, i) => ({
-          time: i * 60,
-          focus: Math.max(50, Math.min(100, 75 + Math.random() * 30 - Math.sin(i / 3) * 20))
-        }));
-        setChartData(mockData);
-        setDuration(25);
+        console.error("❌ Failed to fetch chart data:", err);
+        setError(err.message);
       } finally {
         setLoading(false);
       }
